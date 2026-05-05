@@ -28,3 +28,4 @@ build/
 
 # Scratch exports (top-level only, not atlas_cache/)
 /*.csv
+report.tex
