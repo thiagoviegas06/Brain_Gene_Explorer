@@ -1,6 +1,5 @@
-# Data directories — place these as siblings of brain-viz-python/ but do not commit
-subject_bundle/
-subject_bundle_*/
+# Derived / scratch data
+
 
 # Python
 __pycache__/
