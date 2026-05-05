@@ -1,7 +1,7 @@
 # Brain Gene Expression Explorer
 
 Interactive 3D brain visualization of gene expression data mapped onto the 4S156Parcels atlas.
-Built with [yabplot](https://github.com/...) + PyVista + trame.
+Built with [yabplot](https://pypi.org/project/yabplot/) + PyVista + trame.
 
 ---
 
@@ -39,15 +39,18 @@ Brain_Gene_Explorer/
 
 ## Setup
 
+### 0. Clone the repo
+
+```bash
+git clone https://github.com/thiagoviegas06/Brain_Gene_Explorer.git
+cd Brain_Gene_Explorer
+```
+
 Before running `app.py`, make sure these pieces are in place:
 
-1. Python with the packages in `requirements.txt`
-2. The subject data directories beside this repo:
-   - `subject_bundle/`
-   - `subject_bundle_GTEX-13OW8/`
-3. The atlas cache
-   - `atlas_cache/subcortical/` is already included and ready to use
-   - `atlas_cache/cortical/` is optional, but needed if you want cortical parcels to render with real colours instead of a grey shell
+1. Python 3.10+ with the packages in `requirements.txt`
+2. The five subject data directories placed inside the repo root (see layout above)
+3. The atlas cache — `atlas_cache/subcortical/` is already committed and ready to use; `atlas_cache/cortical/` is optional (see Step 3)
 
 ### 1. Install Python dependencies
 
@@ -99,18 +102,14 @@ subcortical structures still render correctly with real data.
 
 **Install Connectome Workbench on macOS:**
 
+1. Download the macOS installer from the [Connectome Workbench releases page](https://www.humanconnectome.org/software/get-connectome-workbench).
+2. Open the `.dmg` and drag Workbench to `/Applications/`.
+3. Add `wb_command` to your PATH:
+
 ```bash
-# 1. Open the installer (already in ~/Downloads)
-open ~/Downloads/workbench-macub-v2.1.0.dmg
-
-# 2. Drag the Workbench app to /Applications/
-
-# 3. Add wb_command to PATH (~/.zshrc or ~/.bash_profile)
 echo 'export PATH="/Applications/workbench/bin_macosx64:$PATH"' >> ~/.zshrc
 source ~/.zshrc
-
-# 4. Verify
-wb_command -version
+wb_command -version   # verify
 ```
 
 Then build the cortical atlas cache:
