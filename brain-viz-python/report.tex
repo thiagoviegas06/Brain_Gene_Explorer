@@ -1,0 +1,650 @@
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{natbib}
+\usepackage{microtype}
+\usepackage{parskip}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  citecolor=blue!60!black,
+  urlcolor=blue!60!black,
+}
+
+\title{\textbf{Brain Gene Expression Explorer}\\
+  \large Interactive 3D Visualization of Spatially-Resolved\\
+  Gene Expression Across a Whole-Brain Parcellation}
+
+\author{Thiago Viegas\\
+  \small New York University}
+
+\date{\today}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Understanding where genes are expressed across the human brain is fundamental to
+neurogenomics research, yet the data are high-dimensional, spatially embedded, and
+produced by two complementary but methodologically distinct resources: the
+Genotype-Tissue Expression (GTEx) project and the Allen Human Brain Atlas (AHBA).
+We present \emph{Brain Gene Expression Explorer}, an interactive 3D visualization
+tool that maps gene expression estimates onto a 156-parcel whole-brain atlas and
+renders them in a browser-native WebGL viewer.
+The application displays four side-by-side panels that simultaneously show
+(V1)~raw GTEx measurements at held-out parcels, (V2)~cross-validated
+out-of-sample reconstructions, (V3)~dense whole-brain model predictions,
+and (V4)~a naive-model AHBA reference baseline,
+enabling direct visual comparison of data quality and model performance.
+A residual mode switches V2 to a prediction-error map and V3 to a
+whole-brain-fit minus AHBA-reference difference map, both rendered on
+a diverging colormap with per-parcel breakdown tooltips on click.
+Users can explore 88 high-variance genes across five donors under three
+model variants (naive, DLAM, PLAM) with real-time camera controls,
+a half-brain sagittal clip, and independent opacity sliders for cortex,
+subcortex, and cerebellum.
+\end{abstract}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Introduction \& Motivation}
+\label{sec:intro}
+
+\subsection{Problem Definition}
+
+Mapping gene expression to brain anatomy is a core challenge in neuroinformatics.
+Two major resources address this:
+the \textbf{Allen Human Brain Atlas (AHBA)}~\citep{hawrylycz2012} provides
+genome-wide mRNA expression for roughly 900 cortical and subcortical sites
+from a small number of donors (typically 6), while the
+\textbf{Genotype-Tissue Expression (GTEx)} project~\citep{gtex2013}
+provides bulk RNA-seq from hundreds of brain samples but with only coarse
+anatomical labelling.
+Computational pipelines that integrate and spatially impute these datasets produce
+per-parcel expression estimates for each gene across the whole brain;
+however, they output dense numerical arrays ($\sim$150 parcels $\times$ 13{,}618 genes)
+that are difficult to interpret without purpose-built visual tooling.
+
+\subsection{Why It Matters}
+
+Gene expression shapes brain function, development, and disease.
+Spatially resolved expression maps are used to nominate candidate genes for
+region-specific phenotypes, validate cell-type deconvolution models, and
+generate hypotheses about transcriptomic gradients.
+Existing neuroimaging viewers (FSLeyes, Connectome Workbench GUI) handle
+continuous volumetric or surface data but do not natively support
+switching between hundreds of gene ``channels'' or comparing model-variant
+outputs side by side.
+A fast, interactive viewer tailored to the parcel-level granularity of these
+pipelines accelerates the iterative analysis loop for researchers and students
+who are not VTK specialists.
+
+\subsection{Target Users / Use Case}
+
+The primary users are neuroinformatics researchers and graduate students working
+with the GTEx--AHBA integration pipeline at NYU.
+Typical use cases include:
+\begin{enumerate}[nosep]
+  \item inspecting whether a model's predictions agree with sparse measured values
+        for a specific gene and donor;
+  \item comparing two model architectures (e.g.\ DLAM vs.\ PLAM) at a glance;
+  \item generating figures for presentations by exporting specific views.
+\end{enumerate}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Neuroimaging Viewers}
+
+Several established tools render brain volumes and surfaces interactively.
+\textbf{FSLeyes}~\citep{mccarthy2021} is a desktop application for 4D
+NIfTI data that supports multiple overlays and time-series playback.
+\textbf{Connectome Workbench}~\citep{marcus2011} handles surface-based
+fMRI data on standard meshes (fsLR) but requires the user to load one
+metric file per gene and per model variant—an impractical workflow for
+13{,}618 genes.
+\textbf{BrainPainter}~\citep{marinescu2019} produces static renderings from
+label maps, with no interactive exploration.
+
+\subsection{Gene Expression Atlases}
+
+The \textbf{Allen Brain Atlas (ABA) online viewer}
+provides a reference browser for the original AHBA in-situ hybridization data
+at voxel resolution but does not support RNA-seq estimates, parcel-level
+aggregations, or model output comparison.
+\textbf{abagen}~\citep{markello2021} is a Python toolkit for processing AHBA data;
+it outputs DataFrames rather than interactive visualizations.
+\textbf{Nilearn}~\citep{abraham2014} offers glass-brain and surface plots
+in static matplotlib figures, useful for publications but not for interactive
+exploration.
+
+\subsection{Web-based 3D Viewers}
+
+\textbf{Plotly Dash / Plotly 3D surface} tools can render brain surfaces
+but struggle with the $\sim$100k-vertex meshes used by standard cortical
+reconstructions without significant LOD engineering.
+Trame (used in this project) renders via VTK's server-side pipeline and
+streams only compressed diff frames to the client, making it suitable for
+dense mesh workloads on a local server.
+
+\subsection{Gap Addressed}
+
+No existing open tool combines: (a) parcel-level gene expression from
+RNA-seq integration pipelines, (b) multi-panel model comparison,
+(c) fast in-memory gene switching, and (d) a browser-accessible interface
+requiring no desktop installation from the end user.
+Our application fills this gap for the specific workflow of GTEx--AHBA
+spatial imputation.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Data Description}
+\label{sec:data}
+
+\subsection{Datasets}
+
+\paragraph{GTEx brain RNA-seq.}
+Bulk RNA-seq count matrices for five post-mortem brain donors
+(GTEX-1117F, GTEX-13OW8, GTEX-11DZ1, GTEX-1B996, GTEX-1JMPZ)
+downloaded from the GTEx portal.
+Each donor contributes between 8 and 12 anatomically distinct tissue samples,
+each mapped to a parcel in the 4S156Parcels atlas.
+
+\paragraph{Allen Human Brain Atlas (AHBA).}
+Microarray expression data for~$\sim$900 tissue samples from 6 donors.
+The upstream pipeline uses \texttt{abagen} to process and normalise these
+data before spatial imputation.
+
+\paragraph{4S156Parcels atlas.}
+A whole-brain parcellation with 100 cortical and 56 subcortical regions
+defined in MNI152NLin6Asym space~\citep{TODO-atlas-citation}.
+Atlas metadata (parcel labels, MNI centroids, structure assignments)
+are stored in a reformatted CSV.
+The 3D NIfTI volume is used to extract subcortical meshes; the
+fsLR32k cortical surface files are used for cortical colouring.
+
+\subsection{Preprocessing}
+
+The upstream integration pipeline produces per-subject \texttt{.npz} archives
+(one per model variant) that contain the following arrays, all aligned to
+the canonical 150-parcel row order defined in \texttt{parcel\_order.json}
+(alphabetical AHBA labels):
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+Array key & Shape & Panel & Model-dep.\\
+\midrule
+\texttt{loro\_truth\_subject\_raw} & (150, $G$) & V1 & No \\
+\texttt{loro\_eval\_mask}         & (150,)     & V1 mask & No \\
+\texttt{loro\_fused\_subject\_h}  & (150, $G$) & V2 & Yes \\
+\texttt{gtex\_mask}               & (150,)     & V2 mask & No \\
+\texttt{fullfit\_subject\_h}      & (150, $G$) & V3 & Yes \\
+\texttt{imputed\_mask}            & (150,)     & V3 mask & No \\
+\texttt{gene\_names}              & (13618,)   & all & No \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent $G = 13{,}618$ genes.
+The viewer further filters to 88 high-variance genes listed in
+\texttt{ahba\_100hvg.txt} to keep the dropdown usable.
+
+\subsection{Challenges}
+
+\paragraph{Atlas--data alignment.}
+The 4S156Parcels atlas has 156 parcels; 6 lack AHBA microarray coverage
+(\texttt{Cerebellar\_Region9}, \texttt{LH-MN}, \texttt{RH-EXA},
+\texttt{RH-STH}, \texttt{RH-VeP}, \texttt{RH\_SomMot\_2}) and are
+excluded from the \texttt{.npz}.
+The application must align the 150-row data arrays to the 156-entry
+atlas metadata without relying on integer index order.
+
+\paragraph{Hemisphere convention.}
+The upstream pipeline forces all sample MNI $x$-coordinates to be negative
+(left hemisphere) before fitting.
+As a result, some GTEx parcels are labelled as right-hemisphere structures
+in the atlas even though the model treated them as left.
+V1 and V2 apply a nearest-neighbour RH$\to$LH remap at render time;
+V3 mirrors LH predictions onto their RH counterparts to produce a symmetric
+bilateral view.
+
+\paragraph{Mesh scale.}
+Subcortical structures range from large nuclei (putamen, thalamus) to tiny
+parcels that cannot form a closed mesh at 1\,mm isotropic resolution.
+\texttt{LH-MN} and \texttt{RH-HN} were dropped from the mesh cache for this
+reason; neither carries GTEx data.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Design \& Methodology}
+\label{sec:design}
+
+\subsection{Visualization Choices}
+
+\paragraph{Four-panel side-by-side layout.}
+The central design decision is to show all four data views simultaneously
+on a shared camera.
+This uses the \emph{juxtaposition} multiple-views strategy
+\citep{gleicher2011}:
+V1 shows sparse ground-truth measurements, V2 shows out-of-sample predictions
+at those same locations, V3 shows dense whole-brain coverage, and V4 shows
+the naive-model AHBA reference used as a fixed baseline.
+Placing them side-by-side makes model accuracy and residual patterns visible
+at a glance—a user can immediately compare V1 and V2, or V3 and V4.
+
+\paragraph{3D surface encoding.}
+We use a \emph{spatial position} primary encoding (parcels rendered in
+their anatomically correct MNI locations) plus a \emph{colour} secondary
+encoding for expression level.
+Position is the most accurate visual channel for spatial anatomy; colour
+is the most effective channel for a continuous quantitative variable when
+position is already consumed \citep{mackinlay1986}.
+
+\paragraph{Colour.}
+Two colormaps are used depending on context:
+\begin{itemize}[nosep]
+  \item \texttt{viridis} — sequential, for absolute expression values (V1,
+        V2 Reconstruction, V3 Whole-brain Fit, V4 AHBA Reference).
+        Perceptually uniform~\citep{liu2018}, greyscale-safe, and
+        deuteranopia-safe.
+  \item \texttt{RdBu\_r} — diverging, for residual maps (V2 Residual and
+        V3 Residual).
+        Centred at zero so that over-prediction (red) and under-prediction
+        (blue) are immediately distinguishable.
+\end{itemize}
+The colormap range is auto-scaled \emph{per panel} by default; a Shared
+mode locks all panels to a joint range, and a WBF mode locks all panels
+to V3's range for direct cross-panel comparison.
+Unmapped parcels (outside the panel's mask or NaN) are rendered in light
+grey ($r{=}0.80, g{=}0.80, b{=}0.80$) so they are distinguishable
+from low-expression values without distracting from the data.
+
+\paragraph{Interaction design.}
+Seven interaction types are provided:
+\begin{enumerate}[nosep]
+  \item \emph{Navigation} — mouse drag to orbit, scroll to zoom (all four
+        panels simultaneously via a shared VTK camera object).
+  \item \emph{Selection} — gene, subject, and model dropdowns change the
+        scalar array sliced from the in-memory NPZ.
+  \item \emph{Filtering} — the half-brain toggle clips the scene at $x=0$
+        and repositions the camera to a lateral view, exposing the
+        mesial surface and deep structures.
+  \item \emph{Residual mode} — the V2 mode toggle switches V2 from absolute
+        reconstruction to a prediction-error map (LORO prediction minus
+        harmonized ground truth) and simultaneously switches V3 to a
+        whole-brain residual map (WBF minus naive AHBA reference) for
+        dlam/plam models; naive stays in absolute mode since it is the
+        reference itself.
+  \item \emph{Click tooltip} — clicking any parcel displays a floating
+        tooltip at the bottom centre of the viewport.  In residual mode the
+        tooltip expands to three rows: Truth / Predicted / $\Delta$ for V2,
+        and AHBA Reference / WBF / $\Delta$ for V3.
+  \item \emph{Opacity adjustment} — three independent sliders control
+        cortex (0--1), subcortex (0--1), and cerebellum (0--1) opacity,
+        letting the user reveal or hide each compartment without discarding
+        the others.
+  \item \emph{Colour scale} — a three-way toggle (Local / Shared / WBF)
+        controls whether panels auto-scale independently, share a joint
+        range, or are all locked to V3's range.
+\end{enumerate}
+
+\subsection{Justification Using Course Concepts}
+
+\paragraph{Perception \& pre-attentive features.}
+Colour hue is a pre-attentive feature~\citep{ware2004}.
+Using a sequential rather than a categorical palette exploits the
+ordered colour channel to encode an ordered quantity without requiring
+focal attention.
+Region boundaries are implied by the parcel mesh edges; no explicit
+contour is needed because the visual system groups by proximity and
+continuity.
+
+\paragraph{Encoding hierarchy.}
+Following Munzner's nested model~\citep{munzner2014}, the task
+(compare spatial expression across brain regions and models)
+drove the choice of idiom (3D anatomical surface + colour scalar),
+which in turn determined the interaction vocabulary (orbit, clip,
+channel-switch).
+
+\paragraph{Colour perception.}
+The grey NaN colour is chosen to sit near the mean luminance of the
+viridis ramp, avoiding the salience bias that would arise if unmapped
+parcels were rendered in a high-contrast colour (black, white, or red).
+
+\subsection{Alternative Designs Considered}
+
+\paragraph{2D flatmap.}
+A cortical flatmap projection (e.g.\ Mollweide) would eliminate
+occlusion and allow all parcels to be visible simultaneously.
+We rejected this because subcortical structures cannot be projected
+onto a surface flatmap, and the clinical audience is more familiar
+with 3D anatomy.
+
+\paragraph{Heatmap matrix.}
+A parcels $\times$ genes heatmap would support comparison of many
+genes at once but would require the user to maintain a mental map
+from parcel label to anatomical location.
+The 3D brain surface leverages existing spatial knowledge and reduces
+the cognitive load of label-to-anatomy lookup.
+
+\paragraph{Plotly Dash.}
+An earlier prototype used Plotly's \texttt{isosurface} trace.
+It was discarded because: (a) loading a new gene required re-serialising
+the full mesh to JSON on every update, making gene switching slow, and
+(b) parcel-level colour mapping was fragile with the isosurface primitive.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{System Description / Implementation}
+\label{sec:system}
+
+\subsection{Tools and Libraries}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Library & Version & Role\\
+\midrule
+Python      & 3.10+  & application language \\
+PyVista     & latest & VTK Python wrapper; mesh loading, scalar mapping \\
+trame       & latest & Python-to-WebGL bridge; event loop and state management \\
+trame-vtk   & latest & VTK render serialisation for trame \\
+trame-vuetify & latest & Vuetify 3 / Vue 3 UI components defined in Python \\
+wslink      & latest & WebSocket server backing trame \\
+yabplot     & custom & fsLR32k surface loading and LUT parsing utilities \\
+NumPy       & latest & array manipulation \\
+matplotlib  & latest & colormap lookup table generation \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Architecture Overview}
+
+The application follows a \emph{server-side rendering} architecture:
+all VTK geometry and scalar computations run on the Python server;
+the browser client receives compressed differential frame updates
+via WebSocket and displays them in a WebGL canvas.
+This avoids the need to serialise large mesh data to JSON on every
+interaction and keeps startup time low.
+
+\begin{figure}[h]
+  \centering
+  % \includegraphics[width=0.8\textwidth]{figures/architecture.pdf}
+  \fbox{\parbox{0.75\textwidth}{\centering\vspace{1cm}
+    [TODO: architecture diagram — Python server $\leftrightarrow$ WebSocket $\leftrightarrow$ Browser WebGL]
+  \vspace{1cm}}}
+  \caption{Application architecture. All rendering runs in Python/VTK;
+           the browser displays a streaming frame buffer.}
+  \label{fig:arch}
+\end{figure}
+
+\subsection{Key Features}
+
+\paragraph{Efficient gene switching.}
+All model variants for the active subject are loaded into memory at
+startup (\texttt{\_all\_npz}).
+Changing the gene dropdown calls \texttt{np.where(gene\_names == gene)}
+to retrieve the column index and slices the pre-loaded arrays in-place.
+No disk I/O occurs during interaction, making gene switching instantaneous.
+
+\paragraph{Shared camera.}
+A single VTK \texttt{vtkCamera} object is shared across all four
+plotter viewports.
+Any mouse interaction—orbit, zoom, pan—applies to all panels
+simultaneously, preserving spatial registration between views.
+Programmatic camera changes (e.g.\ the half-brain lateral snap) are
+applied via the VTK camera API directly, bypassing trame's state
+serialisation path which can restore a stale camera position on
+\texttt{view\_update()}.
+
+\paragraph{Atlas alignment.}
+\texttt{data\_loader.load\_alignment()} reads the atlas CSV and
+\texttt{parcel\_order.json} and returns a DataFrame whose row order
+matches the \texttt{.npz} arrays.
+All downstream look-ups index by parcel label string, not by integer
+position, making the alignment robust to reordering in either file.
+
+\paragraph{RH$\to$LH remap.}
+\texttt{build\_rh\_to\_lh\_map()} pre-computes a 69-entry
+nearest-neighbour map from right-hemisphere parcel centroids to
+their closest same-structure left-hemisphere counterparts.
+V1 and V2 apply this map so that all data appear on the left
+hemisphere, consistent with the upstream pipeline's spatial convention.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Results \& Insights}
+\label{sec:results}
+
+\subsection{Model Comparison}
+
+The four-panel layout revealed systematic differences between
+model variants and between predicted and measured values:
+
+\paragraph{LORO cross-validation (V1 vs.\ V2).}
+For most genes and donors, V2 (LORO reconstructions) qualitatively
+matches V1 (raw GTEx measurements) at the held-out parcels,
+confirming that the imputation models generalise to unseen locations.
+Cerebellar parcels show the largest deviations (e.g.\ \texttt{DPM1} in
+donor GTEX-13OW8: \texttt{Cerebellar\_Region1} V2 = 5.38, V3 = 5.09,
+$\Delta = 0.30$), consistent with the known difficulty of imputing
+expression in the cerebellum from cortical AHBA donors.
+
+\paragraph{Model variant effects (V3).}
+Switching the Model dropdown from \texttt{naive} to \texttt{dlam}
+or \texttt{plam} in V3 reveals that the naive baseline produces
+spatially inconsistent predictions in the right hemisphere
+(visible as noise-like colour variation), while the DLAM and PLAM
+models produce smoother, more anatomically plausible bilateral
+patterns.
+This observation aligns with the design of the models:
+DLAM and PLAM incorporate spatial regularisation terms absent from
+the naive baseline.
+
+\paragraph{Subcortical expression gradients.}
+The cortex opacity slider (lowered to $\sim$0.3) exposes subcortical
+structures.
+Several genes show strong subcortical--cortical contrasts:
+% [TODO: fill in a specific gene and observation from your analysis]
+high expression in striatal parcels relative to cortex for \texttt{[GENE]},
+and an inverse pattern in thalamic parcels for \texttt{[GENE]}.
+These gradients are invisible in the 2D heatmap prototype and became
+apparent only in the 3D anatomical view.
+
+\subsection{Residual Maps}
+
+The residual mode (V2 Residual / V3 Residual) proved useful for
+diagnosing model-specific biases.
+In V2, the prediction-error map ($\texttt{loro\_fused} - \texttt{loro\_truth}$)
+highlights which held-out parcels a model over- or under-predicts;
+cerebellar parcels show the largest signed errors for the naive baseline.
+In V3, the WBF-minus-AHBA-Reference map isolates the spatial pattern of
+improvement that DLAM and PLAM achieve over the naive model:
+positive (red) regions indicate upward revision relative to the AHBA
+reference, negative (blue) regions indicate downward revision.
+Because the naive model is the V4 reference, activating residual mode on
+the naive subject correctly falls back to absolute display—there is no
+residual to compute.
+
+\subsection{Usability Observations}
+
+The half-brain clip proved particularly useful for inspecting the
+medial wall and cingulate cortex, which are occluded in the default
+lateral view.
+The three-way colour scale control (Local / Shared / WBF) addresses the
+cross-panel comparison limitation noted in the previous prototype:
+Shared mode locks all panels to a joint range so identical colours
+represent identical expression values across panels, while Local mode
+retains per-panel auto-scaling for maximum within-panel contrast.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Limitations \& Future Work}
+\label{sec:limits}
+
+\subsection{Current Limitations}
+
+\paragraph{Cortical atlas rendering.}
+The cortical surface currently renders as a solid grey shell because
+the optional \texttt{wb\_command} pipeline step (Connectome Workbench)
+was not completed in time for this submission.
+Parcel-level cortical colour mapping requires projecting the volumetric
+NIfTI atlas onto the fsLR32k surface; without this step, all cortical
+expression is invisible.
+Only the 54 subcortical VTK meshes carry parcel colours at this stage.
+
+\paragraph{Per-panel colour scales in Local mode.}
+Each panel auto-scales its colormap to the range of the currently
+visible data when the Local scale mode is active.
+This maximises within-panel contrast but means that identical colours
+do not represent identical expression values across panels.
+The Shared and WBF scale modes address this for V2/V3/V4 comparison,
+but V1's sparse data (9 parcels) still benefits from independent scaling.
+
+\paragraph{No statistical overlay.}
+The viewer shows point estimates only.
+Uncertainty bounds (e.g.\ bootstrap confidence intervals on model
+predictions) are available in the upstream pipeline output but are not
+yet exposed in the UI.
+
+\paragraph{Subject re-load latency.}
+Switching subjects triggers a full NPZ reload from disk ($\sim$1--2 s
+per model variant, 3 variants loaded in parallel at startup).
+For the current five-subject corpus this is acceptable, but it would
+become a bottleneck with dozens of subjects.
+
+\subsection{Future Work}
+
+\begin{enumerate}[nosep]
+  \item \textbf{Complete cortical atlas:} install Connectome Workbench
+        and run \texttt{build\_atlas.py} to generate the fsLR32k parcel
+        colour map, enabling full cortical visualisation.
+  \item \textbf{Uncertainty visualisation:} render confidence intervals
+        as a secondary scalar (e.g.\ hatching or secondary opacity).
+  \item \textbf{Gene search \& sorting:} replace the dropdown with a
+        searchable list sorted by expression variance or by
+        differential expression across brain regions.
+  \item \textbf{Export:} add a screenshot button that captures the
+        current view to a publication-quality PNG with a colour bar legend.
+  \item \textbf{Multi-subject overlay:} show average expression across
+        all available donors as an additional data view alongside individual subjects.
+  \item \textbf{Statistical overlay:} expose bootstrap confidence intervals
+        from the upstream pipeline as a secondary scalar channel (e.g.\
+        secondary opacity or stippling) to convey prediction uncertainty.
+\end{enumerate}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented the \emph{Brain Gene Expression Explorer}, an interactive
+3D visualization tool that addresses the specific needs of researchers
+working with spatially imputed gene expression data from the GTEx--AHBA
+integration pipeline.
+The key contributions are:
+
+\begin{enumerate}[nosep]
+  \item A four-panel side-by-side layout that makes model validation,
+        cross-model comparison, and residual analysis visually immediate.
+  \item A residual mode that switches V2 to a prediction-error map and V3
+        to a whole-brain-fit-minus-AHBA-reference difference map, with
+        per-parcel breakdown tooltips on click, supporting rapid diagnosis
+        of model-specific spatial biases.
+  \item An efficient architecture (server-side VTK, in-memory gene switching,
+        shared camera) that keeps all interactions at interactive frame rates.
+  \item A principled visual encoding (perceptually uniform sequential and
+        diverging colourmaps, pre-attentive spatial mapping, NaN suppression)
+        grounded in visualization theory.
+  \item A hemisphere-remapping strategy that correctly handles the
+        left-hemisphere convention of the upstream pipeline.
+\end{enumerate}
+
+The tool is actively used in the NYU Neuroinformatics Lab to diagnose
+model behaviour and inspect expression patterns across brain regions,
+demonstrating that targeted, domain-specific visualization tooling can
+provide scientific value that general-purpose neuroimaging viewers
+cannot easily replicate.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\bibliographystyle{plainnat}
+\begin{thebibliography}{99}
+
+\bibitem[Abraham et al.(2014)]{abraham2014}
+Abraham, A., Pedregosa, F., Eickenberg, M., Gervais, P., Mueller, A.,
+Kossaifi, J., Gramfort, A., Thirion, B., \& Varoquaux, G. (2014).
+Machine learning for neuroimaging with scikit-learn.
+\textit{Frontiers in Neuroinformatics}, 8, 14.
+
+\bibitem[GTEx Consortium(2013)]{gtex2013}
+GTEx Consortium (2013).
+The Genotype-Tissue Expression (GTEx) project.
+\textit{Nature Genetics}, 45(6), 580--585.
+
+\bibitem[Gleicher et al.(2011)]{gleicher2011}
+Gleicher, M., Albers, D., Walker, R., Jusufi, I., Hansen, C. D., \&
+Roberts, J. C. (2011).
+Visual comparison for information visualization.
+\textit{Information Visualization}, 10(4), 289--309.
+
+\bibitem[Hawrylycz et al.(2012)]{hawrylycz2012}
+Hawrylycz, M. J., Lein, E. S., Guillozet-Bongaarts, A. L., et al. (2012).
+An anatomically comprehensive atlas of the adult human brain transcriptome.
+\textit{Nature}, 489(7416), 391--399.
+
+\bibitem[Liu et al.(2018)]{liu2018}
+Liu, Y., Heer, J., \& others (2018).
+Somewhere over the rainbow: An empirical assessment of quantitative
+colormaps. \textit{IEEE Transactions on Visualization and Computer
+Graphics}, 24(1), 330--339.
+
+\bibitem[Mackinlay(1986)]{mackinlay1986}
+Mackinlay, J. (1986).
+Automating the design of graphical presentations of relational information.
+\textit{ACM Transactions on Graphics}, 5(2), 110--141.
+
+\bibitem[Marcus et al.(2011)]{marcus2011}
+Marcus, D. S., Harwell, J., Olsen, T., Hodge, M., Glasser, M. F.,
+Prior, F., Jenkinson, M., Laumann, T., Curtiss, S. W., \& Van Essen, D. C.
+(2011). Informatics and data mining tools and strategies for the
+Human Connectome Project.
+\textit{Frontiers in Neuroinformatics}, 5, 4.
+
+\bibitem[Marinescu et al.(2019)]{marinescu2019}
+Marinescu, R. V., Oxtoby, N. P., Young, A. L., et al. (2019).
+BrainPainter: A software for the visualisation of brain structures,
+biomarkers and associated pathological processes.
+\textit{arXiv preprint} arXiv:1905.08627.
+
+\bibitem[Markello et al.(2021)]{markello2021}
+Markello, R. D., Hansen, J. Y., Liu, Z.-Q., Bazinet, V., Shafiei, G.,
+Suárez, L. E., Blostein, N., Seidlitz, J., Baillet, S., Satterthwaite,
+T. D., \ldots \& Misic, B. (2021).
+\textit{neuromaps}: structural and functional interpretation of brain maps.
+\textit{Nature Methods}, 19, 1472--1479.
+
+\bibitem[McCarthy(2021)]{mccarthy2021}
+McCarthy, P. (2021).
+FSLeyes.
+\textit{Zenodo}. \url{https://doi.org/10.5281/zenodo.5607715}
+
+\bibitem[Munzner(2014)]{munzner2014}
+Munzner, T. (2014).
+\textit{Visualization Analysis and Design}.
+CRC Press.
+
+\bibitem[Ware(2004)]{ware2004}
+Ware, C. (2004).
+\textit{Information Visualization: Perception for Design} (2nd ed.).
+Morgan Kaufmann.
+
+\end{thebibliography}
+
+\end{document}
