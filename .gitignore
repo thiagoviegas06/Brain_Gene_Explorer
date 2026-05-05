@@ -28,4 +28,3 @@ build/
 
 # Scratch exports (top-level only, not atlas_cache/)
 /*.csv
-brain-viz-python/*.csv

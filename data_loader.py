@@ -25,15 +25,15 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-BUNDLE = Path(__file__).parent.parent / 'subject_bundle'
-
 _HERE = Path(__file__).parent
+BUNDLE = _HERE / 'subject_bundle'
+
 SUBJECT_BUNDLES: dict[str, Path] = {
-    'GTEX-1117F':  _HERE.parent / 'subject_bundle',
-    'GTEX-13OW8':  _HERE.parent / 'subject_bundle_GTEX-13OW8',
-    'GTEX-11DZ1':  _HERE.parent / 'subject_bundle_GTEX-11DZ1',
-    'GTEX-1B996':  _HERE.parent / 'subject_bundle_GTEX-1B996',
-    'GTEX-1JMPZ':  _HERE.parent / 'subject_bundle_GTEX-1JMPZ',
+    'GTEX-1117F':  _HERE / 'subject_bundle',
+    'GTEX-13OW8':  _HERE / 'subject_bundle_GTEX-13OW8',
+    'GTEX-11DZ1':  _HERE / 'subject_bundle_GTEX-11DZ1',
+    'GTEX-1B996':  _HERE / 'subject_bundle_GTEX-1B996',
+    'GTEX-1JMPZ':  _HERE / 'subject_bundle_GTEX-1JMPZ',
 }
 
 
