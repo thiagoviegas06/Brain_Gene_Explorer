@@ -513,10 +513,10 @@ def _make_viewport(col: int, title: str, subtitle: str = ''):
     title_actor = vtk.vtkTextActor()
     title_actor.SetInput(title)
     title_actor.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
-    title_actor.SetPosition(0.5, 0.96)
+    title_actor.SetPosition(0.5, 0.92)
     title_actor.GetTextProperty().SetJustificationToCentered()
-    title_actor.GetTextProperty().SetFontSize(10)
-    title_actor.GetTextProperty().SetColor(0.5, 0.5, 0.5)
+    title_actor.GetTextProperty().SetFontSize(14)
+    title_actor.GetTextProperty().SetColor(0.2, 0.2, 0.2)
     plotter.renderer.AddActor2D(title_actor)
     subtitle_actor = None
     if subtitle:
@@ -552,17 +552,13 @@ def _make_viewport(col: int, title: str, subtitle: str = ''):
 # ── 10-13. Build all four viewports ───────────────────────────────────────────
 print("Pre-building meshes for all four viewports...")
 lh_v1, rh_v1, lh_a1, rh_a1, sub_v1, _, _ = _make_viewport(
-    0, 'GTEx Ground Truth',
-    'Combat harmonized ground truth data used to fit and evaluate model')
+    0, 'GTEx Ground Truth')
 lh_v2, rh_v2, lh_a2, rh_a2, sub_v2, _v2_title_actor, _v2_sub_actor = _make_viewport(
-    1, 'Reconstruction',
-    'LORO predicted values for sampled regions')
+    1, 'Reconstruction')
 lh_v3, rh_v3, lh_a3, rh_a3, sub_v3, _v3_title_actor, _v3_sub_actor = _make_viewport(
-    2, 'Whole-Brain Fit',
-    'Ground truth data combined with imputed data over whole brain')
+    2, 'Whole-Brain Fit')
 lh_v4, rh_v4, lh_a4, rh_a4, sub_v4, _, _ = _make_viewport(
-    3, 'AHBA Reference',
-    'Naive whole-brain fit with LORO reconstruction at sampled regions')
+    3, 'AHBA Reference')
 
 # ── 14. Shared camera — rotating any viewport moves all four ──────────────────
 _shared_cam = plotter.renderers[0].GetActiveCamera()
@@ -1071,7 +1067,9 @@ _BTN  = 'font-size:11px; text-transform:none; flex:1;'
 with SinglePageLayout(server) as layout:
     layout.title.set_text('Brain Gene Expression Explorer')
 
-    # ── Toolbar: just the hamburger + title ────────────────────────────────────
+    layout.icon.hide()  # remove non-functional default left hamburger
+
+    # ── Toolbar ────────────────────────────────────────────────────────────────
     with layout.toolbar:
         v3.VAppBarNavIcon(click='drawer = !drawer')
 
