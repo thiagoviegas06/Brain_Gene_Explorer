@@ -10,10 +10,15 @@ Prerequisites:
     cortical requires wb_command — see build_atlas.py for install instructions).
 """
 
+import base64
 import glob
+import io
 from pathlib import Path
 
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.cm as matplotlib_cm
+import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
 import vtk
@@ -50,8 +55,8 @@ SUBCORTICAL_DIR = ATLAS_CACHE / 'subcortical'
 
 # ── Rendering config ───────────────────────────────────────────────────────────
 CMAP            = 'viridis'
-CMAP_DIV        = 'RdBu_r'
-NAN_COLOR       = (0.80, 0.80, 0.80)
+CMAP_DIV        = 'PuOr'
+NAN_COLOR       = (0.55, 0.55, 0.55)
 CORTEX_ALPHA    = 0.92
 SUBCORTEX_ALPHA = 1.0
 ZOOM_SENSITIVITY = 0.1
@@ -288,6 +293,194 @@ def _make_cbar_section_html(clim1, clim2, clim3, clim4, mode: str,
         bar3 = _make_cbar_html('Whole-Brain Fit', *clim3, width='180px')
     bar4 = _make_cbar_html('AHBA Reference', *clim4, width='180px')
     return f'<div style="display:flex;justify-content:space-evenly;">{bar1}{bar2}{bar3}{bar4}</div>'
+
+_gene_stats: dict[str, tuple[float, float]] = {}  # gene → (r, rmse)
+
+def _compute_gene_stats() -> None:
+    """Precompute r, RMSE, mean truth, mean pred for every gene (harmonized LORO)."""
+    global _gene_stats
+    mask    = npz_data['loro_eval_mask'].astype(bool)
+    truth_h = npz_data['loro_truth_subject_h']
+    pred_h  = npz_data['loro_fused_subject_h']
+    stats: dict[str, tuple[float, float, float, float]] = {}
+    for gene in gene_list:
+        g_idx = data_loader.get_gene_idx(npz_data, gene)
+        th = truth_h[mask, g_idx]
+        ph = pred_h[mask, g_idx]
+        valid = ~(np.isnan(th) | np.isnan(ph))
+        if valid.sum() < 2:
+            stats[gene] = (float('nan'),) * 4
+            continue
+        th_v, ph_v = th[valid], ph[valid]
+        r    = float(np.corrcoef(th_v, ph_v)[0, 1])
+        rmse = float(np.sqrt(np.mean((ph_v - th_v) ** 2)))
+        stats[gene] = (r, rmse, float(th_v.mean()), float(ph_v.mean()))
+    _gene_stats = stats
+
+
+def _make_v5_chart(gene: str) -> str:
+    """Two-row V5 analytics panel (all harmonized scale).
+    Row 1 (top):    color-coded parcel scatter + parcel bar chart  (current gene)
+    Row 2 (bottom): per-gene mean scatter      + per-gene r bars   (all genes)
+    """
+    try:
+        g_idx   = data_loader.get_gene_idx(npz_data, gene)
+        mask    = npz_data['loro_eval_mask'].astype(bool)
+        truth_h = npz_data['loro_truth_subject_h'][:, g_idx]
+        pred_h  = npz_data['loro_fused_subject_h'][:, g_idx]
+
+        parcels, th_vals, ph_vals = [], [], []
+        for i, row in atlas_aligned.iterrows():
+            if not mask[i]:
+                continue
+            t, p = float(truth_h[i]), float(pred_h[i])
+            if np.isnan(t) or np.isnan(p):
+                continue
+            parcels.append(row['label'])
+            th_vals.append(t)
+            ph_vals.append(p)
+
+        if len(parcels) < 2:
+            return ''
+
+        th  = np.array(th_vals)
+        ph  = np.array(ph_vals)
+        lbl = [p[3:] if p[:3] in ('LH_', 'LH-') else p for p in parcels]
+
+        r_val = float(np.corrcoef(th, ph)[0, 1])
+        rmse  = float(np.sqrt(np.mean((ph - th) ** 2)))
+
+        genes_sorted = sorted(
+            [(g, _gene_stats[g][0]) for g in gene_list
+             if not np.isnan(_gene_stats.get(g, (float('nan'),))[0])],
+            key=lambda x: x[1],
+        )
+        g_names    = [x[0] for x in genes_sorted]
+        g_r        = [x[1] for x in genes_sorted]
+        bar_colors = ['#e07b39' if g == gene else '#5b8dee' for g in g_names]
+
+        g_mt = np.array([_gene_stats[g][2] for g in g_names])
+        g_mp = np.array([_gene_stats[g][3] for g in g_names])
+
+        fig = plt.figure(figsize=(13, 6.5), facecolor='white')
+        gs  = fig.add_gridspec(2, 2, width_ratios=[1.5, 2.8], hspace=0.55, wspace=0.50)
+        ax_tl = fig.add_subplot(gs[1, 0])
+        ax_tr = fig.add_subplot(gs[1, 1])
+        ax_bl = fig.add_subplot(gs[0, 0])
+        ax_br = fig.add_subplot(gs[0, 1])
+
+        all_v = np.concatenate([th, ph])
+        mn, mx = all_v.min(), all_v.max()
+        pad = (mx - mn) * 0.12
+
+        # ── top-left: color-coded parcel scatter ─────────────────────────
+        pt_colors = plt.cm.viridis(np.linspace(0.15, 0.90, len(parcels)))
+        ax_bl.scatter(th, ph, c=pt_colors, s=55, zorder=3,
+                      edgecolors='white', linewidths=0.5)
+        ax_bl.plot([mn - pad, mx + pad], [mn - pad, mx + pad],
+                   '--', color='#bbb', lw=1.0, zorder=2)
+        for name, x, y in zip(lbl, th, ph):
+            ax_bl.annotate(name, (x, y), fontsize=5.5,
+                           xytext=(3, 2), textcoords='offset points', color='#444')
+        ax_bl.set_xlabel('Harmonized Truth', fontsize=7.5)
+        ax_bl.set_ylabel('LORO Prediction', fontsize=7.5)
+        ax_bl.set_title(f'{gene} — held-out parcels  r={r_val:.3f}  RMSE={rmse:.3f}',
+                        fontsize=7.5, fontweight='bold')
+        ax_bl.set_xlim(mn - pad, mx + pad)
+        ax_bl.set_ylim(mn - pad, mx + pad)
+        ax_bl.tick_params(labelsize=6.5)
+        ax_bl.set_facecolor('#f8f8f8')
+        ax_bl.grid(True, alpha=0.3)
+
+        # ── top-right: parcel bar chart ───────────────────────────────────
+        order = np.argsort(th)
+        ypos  = np.arange(len(order))
+        bh    = 0.38
+        ax_br.barh(ypos + bh / 2, th[order], bh,
+                   label='Harm. Truth', color='#5b8dee', alpha=0.88)
+        ax_br.barh(ypos - bh / 2, ph[order], bh,
+                   label='LORO Pred.', color='#f4845e', alpha=0.88)
+        ax_br.set_yticks(ypos)
+        ax_br.set_yticklabels([lbl[j] for j in order], fontsize=6.5)
+        ax_br.set_xlabel('log₂ expression', fontsize=7.5)
+        ax_br.set_title('Parcel values — sorted by truth', fontsize=7.5, fontweight='bold')
+        ax_br.legend(fontsize=7, loc='lower right')
+        ax_br.tick_params(labelsize=6.5)
+        ax_br.set_facecolor('#f8f8f8')
+        ax_br.grid(True, axis='x', alpha=0.3)
+
+        # ── bottom-left: global scatter, one point per gene ───────────────
+        ga_all  = np.concatenate([g_mt, g_mp])
+        ga_mn, ga_mx = np.nanmin(ga_all), np.nanmax(ga_all)
+        ga_pad  = (ga_mx - ga_mn) * 0.12
+        ax_tl.scatter(g_mt, g_mp, color='#5b8dee', s=28, zorder=3,
+                      edgecolors='white', linewidths=0.3, alpha=0.75)
+        cur_mt = _gene_stats.get(gene, (float('nan'),)*4)[2]
+        cur_mp = _gene_stats.get(gene, (float('nan'),)*4)[3]
+        if not np.isnan(cur_mt):
+            ax_tl.scatter([cur_mt], [cur_mp], color='#e07b39', s=55, zorder=5,
+                          edgecolors='white', linewidths=0.5)
+            ax_tl.annotate(gene, (cur_mt, cur_mp), fontsize=5.5,
+                           xytext=(4, 3), textcoords='offset points',
+                           color='#e07b39', fontweight='bold')
+        ax_tl.plot([ga_mn - ga_pad, ga_mx + ga_pad],
+                   [ga_mn - ga_pad, ga_mx + ga_pad],
+                   '--', color='#aaa', lw=0.9, zorder=2)
+        ax_tl.set_xlabel('Mean Harm. Truth', fontsize=7.5)
+        ax_tl.set_ylabel('Mean LORO Pred.', fontsize=7.5)
+        ax_tl.set_title('All genes — mean expression  (orange = current)',
+                        fontsize=7.5, fontweight='bold')
+        ax_tl.set_xlim(ga_mn - ga_pad, ga_mx + ga_pad)
+        ax_tl.set_ylim(ga_mn - ga_pad, ga_mx + ga_pad)
+        ax_tl.tick_params(labelsize=6.5)
+        ax_tl.set_facecolor('#f8f8f8')
+        ax_tl.grid(True, alpha=0.3)
+
+        # ── bottom-right: per-gene r bar chart ───────────────────────────
+        xpos = np.arange(len(g_names))
+        ax_tr.bar(xpos, g_r, color=bar_colors, width=0.8, zorder=3)
+        ax_tr.axhline(0, color='#888', lw=0.6, zorder=2)
+        ax_tr.set_xticks(xpos)
+        ax_tr.set_xticklabels(g_names, rotation=90, fontsize=4.0)
+        ax_tr.set_ylabel('Pearson r', fontsize=7.5)
+        ax_tr.set_title('Per-gene LORO r  (sorted; orange = current)',
+                        fontsize=7.5, fontweight='bold')
+        ax_tr.tick_params(axis='y', labelsize=6.5)
+        ax_tr.set_facecolor('#f8f8f8')
+        ax_tr.grid(True, axis='y', alpha=0.3)
+        ax_tr.set_xlim(-0.5, len(g_names) - 0.5)
+
+        # ── row separator + row labels ────────────────────────────────────
+        pos_top = ax_bl.get_position()
+        pos_bot = ax_tl.get_position()
+        mid_y   = (pos_top.y0 + pos_bot.y1) / 2
+        from matplotlib.lines import Line2D
+        fig.add_artist(Line2D([0.02, 0.98], [mid_y, mid_y],
+                               transform=fig.transFigure,
+                               color='#d0d0d0', linewidth=0.8, linestyle='-'))
+        fig.text(0.005, (pos_top.y0 + pos_top.y1) / 2, 'Current gene',
+                 fontsize=6.5, color='#aaa', va='center', ha='left',
+                 rotation=90, style='italic')
+        fig.text(0.005, (pos_bot.y0 + pos_bot.y1) / 2, 'All genes',
+                 fontsize=6.5, color='#aaa', va='center', ha='left',
+                 rotation=90, style='italic')
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+        buf.seek(0)
+        b64 = base64.b64encode(buf.read()).decode()
+        return (
+            f'<img src="data:image/png;base64,{b64}" '
+            f'style="max-width:100%;height:auto;display:block;" />'
+        )
+    except Exception as e:
+        print(f'[v5] {e}')
+        return ''
+
+
+# Precompute per-gene stats for the initial subject/model
+_compute_gene_stats()
 
 # ── 8. PyVista plotter — three side-by-side viewports ─────────────────────────
 pv.global_theme.trame.default_mode = 'server'
@@ -583,6 +776,8 @@ state.n_v4           = f"{len(c4_i)}cx+{len(s4_i)}sub"
 _ic1, _ic2, _ic3, _ic4 = _init_clims
 state.v1_legend_html  = _make_legend_html(c1_i, s1_i, _ic1)
 state.cbar_html       = _make_cbar_section_html(_ic1, _ic2, _ic3, _ic4, 'local')
+state.v5_chart_html   = _make_v5_chart(INIT_GENE)
+state.show_v5         = False
 state.drawer          = True
 state.tooltip_visible     = False
 state.tooltip_parcel      = ''
@@ -647,6 +842,8 @@ def _reload_scene(c1, s1, c2, s2, c3, s3, gene, v2_is_residual: bool = False):
         state.cbar_mode, sc, v2_is_residual, v3_is_residual)
     _update_cbars(c1, s1, clim1, clim2, clim3, clim4, state.cbar_mode, v2_is_residual, v3_is_residual)
 
+    state.v5_chart_html = _make_v5_chart(gene)
+
     # Store per-parcel lookup dicts for residual tooltips
     if v2_is_residual:
         ct, st = data_loader.v1_gtex_harmonized(npz_data, atlas_aligned, gene)
@@ -678,6 +875,7 @@ def on_model(model, **_):
     global npz_data
     is_residual = (state.v2_mode == 'residual')
     npz_data = _all_npz[model]
+    _compute_gene_stats()
     c1, s1, c2, s2, c3, s3 = _get_all(state.gene, state.cbar_mode, state.v2_mode)
     state.n_v1 = f"{len(c1)}cx+{len(s1)}sub"
     state.n_v2 = f"{len(c2)}cx+{len(s2)}sub"
@@ -692,6 +890,7 @@ def on_subject(subject, **_):
     is_residual = (state.v2_mode == 'residual')
     _all_npz = {m: data_loader.load_subject(m, subject) for m in _MODEL_LIST}
     npz_data = _all_npz[state.model]
+    _compute_gene_stats()
     c1, s1, c2, s2, c3, s3 = _get_all(state.gene, state.cbar_mode, state.v2_mode)
     c4, s4 = _get_ahba_ref(state.gene)
     state.n_v1 = f"{len(c1)}cx+{len(s1)}sub"
@@ -910,8 +1109,8 @@ with SinglePageLayout(server) as layout:
 
             v3.VDivider(style=_DIV)
 
-            # ── V2 Panel ──────────────────────────────────────────────────────
-            html.P('V2 Panel', style=_SEC)
+            # ── Error Analysis ────────────────────────────────────────────────
+            html.P('Error Analysis', style=_SEC)
             with v3.VBtnToggle(
                 v_model=('v2_mode',), mandatory=True,
                 density='compact', variant='outlined', divided=True,
@@ -970,6 +1169,17 @@ with SinglePageLayout(server) as layout:
                 density='compact', hide_details=True,
             )
 
+            v3.VDivider(style=_DIV)
+
+            # ── Analytics ─────────────────────────────────────────────────
+            html.P('Analytics', style=_SEC)
+            v3.VSwitch(
+                v_model=('show_v5',),
+                label='Show V5 Analytics',
+                density='compact', hide_details=True,
+                color='primary',
+            )
+
     # ── Hover tooltip card (fixed, bottom-center, above colorbar) ────────────
     with html.Div(
         v_show=('tooltip_visible',),
@@ -1011,6 +1221,17 @@ with SinglePageLayout(server) as layout:
                         style='font-size:11px; color:#888; margin-right:6px; white-space:nowrap;',
                     )
                     html.Span(v_html=('v1_legend_html',))
+            with html.Div(
+                v_show=('show_v5',),
+                style='flex-shrink:0; border-top:1px solid #e0e0e0; background:white;',
+            ):
+                with html.Div(style='padding:4px 14px 2px;'):
+                    html.Span(
+                        'V5 — Model Analytics',
+                        style='font-size:10px; font-weight:700; color:#999; letter-spacing:0.10em; text-transform:uppercase;',
+                    )
+                with html.Div(style='padding:0 14px 8px;'):
+                    html.Div(v_html=('v5_chart_html',))
 
 
 if __name__ == '__main__':

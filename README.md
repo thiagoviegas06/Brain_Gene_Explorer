@@ -169,7 +169,7 @@ panel rotates all four simultaneously. Use mouse drag to rotate, scroll wheel to
 ### Colour scheme
 
 - Sequential colormap: `viridis`, range auto-scaled per panel (or shared, see Color scale control)
-- Diverging colormap: `RdBu_r`, used for V2 in Residual mode and V3 in Residual mode with dlam/plam
+- Diverging colormap: `PuOr` (purple-orange), used for V2 in Residual mode and V3 in Residual mode with dlam/plam; chosen for colorblind accessibility (safe for deuteranopia and protanopia)
 - Unmapped parcels (outside mask or NaN): light grey
 - Background: white
 
